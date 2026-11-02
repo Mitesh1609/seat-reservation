@@ -11,26 +11,30 @@ import java.util.Objects;
 
 
 @Entity
+@Table(name = "seat", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_seat_show_number", columnNames = {"show_id", "seat_number"})
+})
 @NoArgsConstructor
 @AllArgsConstructor
 public class Seat {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private long id;
+    private Long id;
 
     @Enumerated(EnumType.STRING)
     @ColumnDefault("'AVAILABLE'")
     private SeatState state = SeatState.AVAILABLE;
 
     @NonNull
+    @Column(name = "seat_number", nullable = false)
     private String seat_number;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id")
     private User user;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "show_id")
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "show_id", nullable = false)
     private Show show;
 
     public long getId() {

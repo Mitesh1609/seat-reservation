@@ -52,7 +52,7 @@ public class SecurityConfig {
                 .matcher(HttpMethod.POST, "/web/v1/user/create");
         var login = PathPatternRequestMatcher.withDefaults()
                 .matcher(HttpMethod.POST, "/web/v1/auth/login");
-        var createShow = PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, "/shows");
+        var createShow = PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, "/web/v1/show/*");
         var authorities = new JwtGrantedAuthoritiesConverter();
         authorities.setAuthoritiesClaimName("roles");
         authorities.setAuthorityPrefix("ROLE_");

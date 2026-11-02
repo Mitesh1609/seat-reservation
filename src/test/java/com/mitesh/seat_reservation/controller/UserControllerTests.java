@@ -50,7 +50,7 @@ class UserControllerTests {
             User user = invocation.getArgument(0);
             org.junit.jupiter.api.Assertions.assertEquals("mitesh", user.getUsername());
             org.junit.jupiter.api.Assertions.assertEquals(Role.USER, user.getRole());
-            org.junit.jupiter.api.Assertions.assertEquals(0L, user.getId());
+            assertNull(user.getId());
             assertNotEquals("example-password-123", user.getPasswordHash());
             assertTrue(passwordEncoder.matches("example-password-123", user.getPasswordHash()));
             assertFalse(user.toString().contains(user.getPasswordHash()));

@@ -148,9 +148,9 @@ class JwtAuthenticationTests {
 
     @Test
     void roleRulesAllowOnlyAdminToCreateShow() throws Exception {
-        mvc.perform(post("/shows").header(HttpHeaders.AUTHORIZATION, "Bearer " + token("USER")))
+        mvc.perform(post("/web/v1/show/create").header(HttpHeaders.AUTHORIZATION, "Bearer " + token("USER")))
                 .andExpect(status().isForbidden());
-        mvc.perform(post("/shows").header(HttpHeaders.AUTHORIZATION, "Bearer " + token("ADMIN")))
+        mvc.perform(post("/web/v1/show/create").header(HttpHeaders.AUTHORIZATION, "Bearer " + token("ADMIN")))
                 .andExpect(status().isNoContent());
     }
 
@@ -221,7 +221,7 @@ class JwtAuthenticationTests {
             return Map.of("user_id", jwt.getSubject());
         }
 
-        @PostMapping("/shows")
+        @PostMapping("/web/v1/show/create")
         @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
         void createShow() {
         }
