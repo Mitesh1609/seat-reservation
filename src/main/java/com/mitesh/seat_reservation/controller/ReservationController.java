@@ -22,9 +22,23 @@ public class ReservationController {
 
     @PostMapping("/shows/{id}/reserve")
     public ResponseEntity<ReservationResponse> reserveSeats(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ReserveSeatsRequest request){
-        Long userId = Long.valueOf(jwt.getSubject());
+        if(jwt.getSubject() != null && !jwt.getSubject().isEmpty()){
+            Long userId = Long.valueOf(jwt.getSubject());
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(reservationService.reserveSeats(id, userId, request));
+        }else {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+    }
 
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(reservationService.reserveSeats(id, userId, request));
+    @PostMapping("/reservations/{id}/cancel")
+    public ResponseEntity<ReservationResponse> cancelReservation(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt){
+        if(jwt.getSubject() != null && !jwt.getSubject().isEmpty()){
+            Long userId = Long.valueOf(jwt.getSubject());
+            return ResponseEntity.status(HttpStatus.OK)
+                    .body(reservationService.cancelReservation(id, userId));
+        }else {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
     }
 }

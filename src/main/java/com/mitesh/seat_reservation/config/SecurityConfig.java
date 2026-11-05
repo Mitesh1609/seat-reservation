@@ -52,6 +52,10 @@ public class SecurityConfig {
                 .matcher(HttpMethod.POST, "/web/v1/user/create");
         var login = PathPatternRequestMatcher.withDefaults()
                 .matcher(HttpMethod.POST, "/web/v1/auth/login");
+        var liveness = PathPatternRequestMatcher.withDefaults()
+                .matcher(HttpMethod.GET, "/actuator/health/liveness");
+        var readiness = PathPatternRequestMatcher.withDefaults()
+                .matcher(HttpMethod.GET, "/actuator/health/readiness");
         var createShow = PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, "/web/v1/show/*");
         var authorities = new JwtGrantedAuthoritiesConverter();
         authorities.setAuthoritiesClaimName("roles");
@@ -67,7 +71,7 @@ public class SecurityConfig {
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(createUser, login).permitAll()
+                        .requestMatchers(createUser, login, liveness, readiness).permitAll()
                         .requestMatchers(createShow).hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(resource -> resource.jwt(jwt ->

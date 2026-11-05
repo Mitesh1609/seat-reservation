@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,28 +42,42 @@ public class ReservationService {
 
     @Transactional
     public ReservationResponse reserveSeats(Long showId, Long userId, ReserveSeatsRequest request){
+        User user = userRepository.findByIdForUpdate(userId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        Reservation idempotentReservation = reservationRespository.findByIdempotencyKeyAndUser(request.idempotencyKey(), user);
+        if(idempotentReservation != null){
+            List<String> idempotentSeats = idempotentReservation.getSeats().stream().map(Seat::getSeat_number).toList();
+            if(idempotentReservation.getShow().getId() == showId && idempotentSeats.equals(request.seats()))
+                return toReservationResponse(idempotentReservation);
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Invalid request");
+        }
+        List<Seat> seats = seatRepository.findAllByShow_IdAndSeat_numberInOrderByIdAsc(showId, request.seats());
+        if(seats.size() != request.seats().size() ){
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid number of seats");
+        }
         Show show = showRepository.findById(showId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Show not found"));
-        checkAvailability(show.getSeats(), request.seats());
+        List<Reservation> userBookedReservations = reservationRespository.findByUserAndShow_IdAndStatus(user, showId, ReservationStatus.CONFIRMED);
+        long bookedSeats = 0;
+        for (Reservation reservation : userBookedReservations) {
+            bookedSeats += reservation.getSeats().size();
+        }
+        if(bookedSeats + request.seats().size() > show.getUser_limit()){
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Seat limit exceeded");
+        }
+        checkAvailability(seats, request.seats());
         Reservation reservation = new Reservation();
         reservation.setShow(show);
         reservation.setAmountPaise((long) show.getPrice() * request.seats().size());
-        List<Seat> seats = new ArrayList<>();
-        request.seats().forEach(seat -> {
-            seats.add(seatRepository.findByShow_IdAndSeat_number(showId, seat));
-        });
-        User user = userRepository.findById(userId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
-        seats.forEach(seat -> {
-            seat.setState(SeatState.CONFIRMED);
-            seat.setUser(user);
-            seatRepository.save(seat);
-        });
         reservation.setSeats(seats);
         reservation.setIdempotencyKey(request.idempotencyKey());
         reservation.setStatus(ReservationStatus.CONFIRMED);
-
         reservation.setUser(user);
         Reservation savedReservation = reservationRespository.save(reservation);
+        seats.forEach(seat -> {
+            seat.setState(SeatState.CONFIRMED);
+            seat.setUser(user);
+        });
+        seatRepository.saveAll(seats);
         return toReservationResponse(savedReservation);
     }
 
@@ -94,5 +109,56 @@ public class ReservationService {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Seat not found");
             }
         });
+    }
+
+    @Transactional
+    public ReservationResponse cancelReservation(Long id, Long userId) {
+        User user = userRepository.findByIdForUpdate(userId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        Reservation reservation = reservationRespository.findByIdAndUser(id, user);
+        if(reservation == null){
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Reservation not found");
+        }
+        if(reservation.getStatus().equals(ReservationStatus.CANCELLED)){
+            return toReservationResponse(reservation);
+        }
+        List<String> seatNumbers = reservation.getSeats()
+                .stream()
+                .map(Seat::getSeat_number)
+                .toList();
+
+        List<Seat> seats =
+                seatRepository.findAllByShow_IdAndSeat_numberInOrderByIdAsc(
+                        reservation.getShow().getId(),
+                        seatNumbers
+                );
+        if (seats.size() != seatNumbers.size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Reservation seats are not in a cancellable state"
+            );
+        }
+        validateSeatsForCancellation(seats, reservation.getUser());
+        seats.forEach(seat -> {
+            seat.setState(SeatState.AVAILABLE);
+            seat.setUser(null);
+        });
+        seatRepository.saveAll(seats);
+        reservation.setStatus(ReservationStatus.CANCELLED);
+        reservation.setCancelledAt(Instant.now());
+        Reservation savedReservation = reservationRespository.save(reservation);
+        return  toReservationResponse(savedReservation);
+    }
+
+    private void validateSeatsForCancellation(List<Seat> seats, User user) {
+        for (Seat seat : seats) {
+            if (seat.getState() != SeatState.CONFIRMED
+                    || seat.getUser() == null
+                    || !seat.getUser().getId().equals(user.getId())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Reservation seats are not in a cancellable state"
+                );
+            }
+        }
     }
 }
