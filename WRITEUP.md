@@ -133,7 +133,7 @@ The remaining delivery work is:
 
 1. provision the first administrator through a secure deployment operation;
 2. deploy the container and PostgreSQL to a public environment;
-3. add the required one-command burst client and run it against the live URL;
+3. run the included burst client at progressively higher load against the live URL;
 4. tune the database pool, transaction and lock timeouts from measured burst data;
 5. map expected lock-timeout and serialization failures to clean domain responses;
 6. add dashboards and alert rules, including an independent reconciliation check;

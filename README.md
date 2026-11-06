@@ -20,13 +20,13 @@ Implemented:
 - show state with per-seat status and reconciliation counts;
 - liveness, database-backed readiness, Prometheus metrics, and JSON request logs;
 - Flyway-managed PostgreSQL schema;
-- a non-root, multi-stage Docker image.
+- a non-root, multi-stage Docker image;
+- a safe, one-command local concurrency check.
 
 Still pending before submission:
 
 - public deployment and live URL;
-- one-command concurrency burst script;
-- live burst verification and production tuning;
+- high-volume live burst verification and production tuning;
 - dashboards or public log access.
 
 ## Technology
@@ -261,3 +261,23 @@ Package the main application without compiling or running test sources:
 
 The current source packages successfully. The Docker image has not been built on
 this workstation because Docker is not installed here.
+
+## Local concurrency check
+
+The PowerShell burst script creates a fresh show and temporary users, then verifies
+hot-seat contention, an idempotent retry, the per-user limit, zero 5xx responses,
+and the final seat-count invariant.
+
+Set the credentials of an existing administrator and run the safe defaults:
+
+```powershell
+$env:BURST_ADMIN_USERNAME = 'admin'
+$env:BURST_ADMIN_PASSWORD = '<admin-password>'
+./scripts/Invoke-LocalBurst.ps1
+```
+
+The default run sends 100 hot-seat requests with a concurrency limit of 20. Values
+above 500 requests, 50 concurrent requests, or 50 users require the explicit
+`-AllowHighLoad` switch. Increase them only against an appropriately sized
+environment; the safe local defaults are intended to avoid exhausting a developer
+machine.
