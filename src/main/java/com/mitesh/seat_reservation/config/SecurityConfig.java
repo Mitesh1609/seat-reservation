@@ -1,8 +1,12 @@
 package com.mitesh.seat_reservation.config;
 
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -19,6 +23,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.io.IOException;
 
 @Configuration
 @EnableMethodSecurity
@@ -50,12 +56,11 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         var createUser = PathPatternRequestMatcher.withDefaults()
                 .matcher(HttpMethod.POST, "/web/v1/user/create");
+        var createAdmin = PathPatternRequestMatcher.withDefaults()
+                .matcher(HttpMethod.POST, "/web/v1/user/create-admin");
         var login = PathPatternRequestMatcher.withDefaults()
                 .matcher(HttpMethod.POST, "/web/v1/auth/login");
-        var liveness = PathPatternRequestMatcher.withDefaults()
-                .matcher(HttpMethod.GET, "/actuator/health/liveness");
-        var readiness = PathPatternRequestMatcher.withDefaults()
-                .matcher(HttpMethod.GET, "/actuator/health/readiness");
+        var publicActuatorEndpoints = EndpointRequest.to("health", "prometheus");
         var createShow = PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, "/web/v1/show/*");
         var authorities = new JwtGrantedAuthoritiesConverter();
         authorities.setAuthoritiesClaimName("roles");
@@ -70,12 +75,25 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, exception) ->
+                                writeSecurityError(response, HttpStatus.UNAUTHORIZED, "Unauthorized"))
+                        .accessDeniedHandler((request, response, exception) ->
+                                writeSecurityError(response, HttpStatus.FORBIDDEN, "Forbidden")))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(createUser, login, liveness, readiness).permitAll()
-                        .requestMatchers(createShow).hasRole("ADMIN")
+                        .requestMatchers(createUser, login).permitAll()
+                        .requestMatchers(publicActuatorEndpoints).permitAll()
+                        .requestMatchers(createAdmin, createShow).hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(resource -> resource.jwt(jwt ->
                         jwt.jwtAuthenticationConverter(jwtAuthentication)))
                 .build();
+    }
+
+    private void writeSecurityError(HttpServletResponse response, HttpStatus status, String message)
+            throws IOException {
+        response.setStatus(status.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.getWriter().write("{\"status\":" + status.value() + ",\"message\":\"" + message + "\"}");
     }
 }

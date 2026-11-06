@@ -6,6 +6,7 @@ import com.mitesh.seat_reservation.entity.Reservation;
 import com.mitesh.seat_reservation.entity.Seat;
 import com.mitesh.seat_reservation.entity.Show;
 import com.mitesh.seat_reservation.entity.User;
+import com.mitesh.seat_reservation.metrics.ReservationMetrics;
 import com.mitesh.seat_reservation.repository.ReservationRespository;
 import com.mitesh.seat_reservation.repository.SeatRepository;
 import com.mitesh.seat_reservation.repository.ShowRepository;
@@ -32,12 +33,14 @@ public class ReservationService {
     private final ShowRepository showRepository;
     private final SeatRepository seatRepository;
     private final UserRepository userRepository;
+    private final ReservationMetrics reservationMetrics;
 
-    public ReservationService(ReservationRespository reservationRespository, ShowRepository showRepository, SeatRepository seatRepository, UserRepository userRepository) {
+    public ReservationService(ReservationRespository reservationRespository, ShowRepository showRepository, SeatRepository seatRepository, UserRepository userRepository, ReservationMetrics reservationMetrics) {
         this.reservationRespository = reservationRespository;
         this.showRepository = showRepository;
         this.seatRepository = seatRepository;
         this.userRepository = userRepository;
+        this.reservationMetrics = reservationMetrics;
     }
 
     @Transactional
@@ -46,8 +49,10 @@ public class ReservationService {
         Reservation idempotentReservation = reservationRespository.findByIdempotencyKeyAndUser(request.idempotencyKey(), user);
         if(idempotentReservation != null){
             List<String> idempotentSeats = idempotentReservation.getSeats().stream().map(Seat::getSeat_number).toList();
-            if(idempotentReservation.getShow().getId() == showId && idempotentSeats.equals(request.seats()))
+            if(idempotentReservation.getShow().getId() == showId && idempotentSeats.equals(request.seats())) {
+                reservationMetrics.recordIdempotentReplay();
                 return toReservationResponse(idempotentReservation);
+            }
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Invalid request");
         }
         List<Seat> seats = seatRepository.findAllByShow_IdAndSeat_numberInOrderByIdAsc(showId, request.seats());
@@ -62,6 +67,7 @@ public class ReservationService {
             bookedSeats += reservation.getSeats().size();
         }
         if(bookedSeats + request.seats().size() > show.getUser_limit()){
+            reservationMetrics.recordPerUserLimitDecline();
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Seat limit exceeded");
         }
         checkAvailability(seats, request.seats());
@@ -78,6 +84,7 @@ public class ReservationService {
             seat.setUser(user);
         });
         seatRepository.saveAll(seats);
+        reservationMetrics.recordConfirmedReservation();
         return toReservationResponse(savedReservation);
     }
 
@@ -103,6 +110,7 @@ public class ReservationService {
         requestSeats.forEach(requestSeat -> {
             if (allSeats.containsKey(requestSeat)) {
                 if(!SeatState.AVAILABLE.toString().equals(allSeats.get(requestSeat))){
+                    reservationMetrics.recordSeatTakenDecline();
                     throw new ResponseStatusException(HttpStatus.CONFLICT, "Seats are not available");
                 };
             }else{

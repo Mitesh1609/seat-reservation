@@ -20,4 +20,9 @@ public class UserController {
     public ResponseEntity<UserResponse> createUser(@RequestBody CreateUserRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(userService.createUser(request));
     }
+
+    @PostMapping("/create-admin")
+    public ResponseEntity<UserResponse> createAdmin(@RequestBody CreateUserRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(userService.createAdmin(request));
+    }
 }

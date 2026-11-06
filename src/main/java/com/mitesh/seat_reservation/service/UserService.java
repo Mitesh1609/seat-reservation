@@ -27,6 +27,15 @@ public class UserService {
 
     @Transactional
     public UserResponse createUser(CreateUserRequest request) {
+        return createUser(request, Role.USER);
+    }
+
+    @Transactional
+    public UserResponse createAdmin(CreateUserRequest request) {
+        return createUser(request, Role.ADMIN);
+    }
+
+    private UserResponse createUser(CreateUserRequest request, Role role) {
         if (request == null || request.username() == null || request.username().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Username is required");
         }
@@ -46,7 +55,7 @@ public class UserService {
         user.setUsername(username);
         // Preserve the exact password, including whitespace, and persist only its hash.
         user.setPasswordHash(passwordEncoder.encode(password));
-        user.setRole(Role.USER);
+        user.setRole(role);
         try {
             // The unique constraint decides concurrent duplicate requests atomically.
             User saved = userRepository.saveAndFlush(user);

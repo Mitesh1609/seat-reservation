@@ -1,148 +1,263 @@
 # Seat Reservation
 
-## Create a user
+A Spring Boot and PostgreSQL service for reserving assigned seats correctly under
+contention. The database is the source of truth: concurrent requests use row locks,
+deterministic lock ordering, transactions, and unique constraints to prevent
+double-selling, per-user limit races, and duplicate idempotent operations.
 
-With the application running, send `POST http://localhost:8080/web/v1/user/create`
-with `Content-Type: application/json`:
+The detailed design and current limitations are documented in
+[WRITEUP.md](WRITEUP.md).
 
-```json
-{"username": "mitesh", "password": "example-password-123"}
+## Current status
+
+Implemented:
+
+- user registration and RS256 JWT authentication;
+- administrator-only show and administrator creation;
+- atomic, all-or-nothing multi-seat reservation;
+- per-user seat limits and idempotent retries;
+- owner-only explicit cancellation;
+- show state with per-seat status and reconciliation counts;
+- liveness, database-backed readiness, Prometheus metrics, and JSON request logs;
+- Flyway-managed PostgreSQL schema;
+- a non-root, multi-stage Docker image.
+
+Still pending before submission:
+
+- public deployment and live URL;
+- one-command concurrency burst script;
+- live burst verification and production tuning;
+- dashboards or public log access.
+
+## Technology
+
+- Java 25
+- Spring Boot 4.1
+- Spring Data JPA and Spring Security
+- PostgreSQL
+- Flyway
+- Micrometer and Prometheus
+- Maven Wrapper
+
+## Correctness model
+
+- Requested seats are locked with `PESSIMISTIC_WRITE` in ascending database ID
+  order.
+- The user row is locked before checking the user's limit and idempotency key.
+- Multi-seat requests are all-or-nothing. If one seat is unavailable, none are
+  reserved.
+- The same user and idempotency key return the original reservation only when the
+  show and seats match; a different request returns `409`.
+- Cancellation verifies ownership and the current seat assignment while holding
+  locks before making seats available again.
+- Money is always represented as integer paise.
+
+## Run locally
+
+### Prerequisites
+
+- JDK 25
+- PostgreSQL
+- PowerShell 7 for the included local RSA-key script
+
+Create an empty PostgreSQL database:
+
+```sql
+CREATE DATABASE seat_reservation;
 ```
 
-Success returns HTTP 201:
-
-```json
-{"id": 1, "username": "mitesh", "role": "USER"}
-```
-
-Usernames are trimmed, case-sensitive, and limited to 255 characters. Missing or
-blank usernames return 400; an existing username returns 409. The database unique
-constraint also protects against simultaneous requests for the same username.
-The endpoint is public and always assigns the USER role. After creation, use the
-login endpoint below to obtain an authentication token.
-
-Passwords are required, must contain at least 8 characters and at most 72 UTF-8
-bytes, and are preserved exactly (not trimmed). Only a salted BCrypt hash is
-stored in `users.password_hash`. Passwords and hashes are excluded from API
-responses and object string representations.
-
-## JWT authentication
-
-Generate development RSA keys once using PowerShell 7:
+Generate a local JWT signing pair:
 
 ```powershell
 ./scripts/New-LocalJwtKeys.ps1
 ```
 
-The script creates a 3072-bit RSA key pair under the Git-ignored `.local/jwt/`
-directory and prints two environment variable assignments. Add both to the same
-IntelliJ run configuration as `DB_PASSWORD`:
+The script writes the keys under the Git-ignored `.local/jwt/` directory and prints
+the two resource values required below.
 
-| Environment variable | Value |
-| --- | --- |
-| `JWT_PRIVATE_KEY` | `file:///C:/absolute/path/to/private.pem` (PKCS#8 PEM) |
-| `JWT_PUBLIC_KEY` | `file:///C:/absolute/path/to/public.pem` (X.509 PEM) |
-| `JWT_ISSUER` | Defaults to `seat-reservation` |
-| `JWT_AUDIENCE` | Defaults to `seat-reservation-api` |
-| `JWT_ACCESS_TOKEN_TTL` | Defaults to `15m`; allowed range: 1 second to 1 hour |
+Configure these environment variables in the shell or IntelliJ run configuration:
 
-Keys must be externally provisioned and identical on every application instance.
-The application fails startup for missing, mismatched, or undersized keys; it
-never creates a new signing key automatically. In production, mount keys from a
-secret manager, restrict private-key access, and use HTTPS. The local script is
-for development. Key rotation currently requires coordinated configuration
-changes; replacing the pair invalidates existing tokens.
+| Variable | Required | Default or example |
+| --- | --- | --- |
+| `DB_URL` | No | `jdbc:postgresql://localhost:5432/seat_reservation` |
+| `DB_USERNAME` | No | `postgres` |
+| `DB_PASSWORD` | Yes | PostgreSQL password |
+| `JWT_PRIVATE_KEY` | Yes | `file:///C:/absolute/path/to/private.pem` |
+| `JWT_PUBLIC_KEY` | Yes | `file:///C:/absolute/path/to/public.pem` |
+| `JWT_ISSUER` | No | `seat-reservation` |
+| `JWT_AUDIENCE` | No | `seat-reservation-api` |
+| `JWT_ACCESS_TOKEN_TTL` | No | `15m`, maximum `1h` |
 
-Send `POST /web/v1/auth/login` with:
-
-```json
-{"username": "mitesh", "password": "example-password-123"}
-```
-
-Success returns HTTP 200 with cache prevention headers:
-
-```json
-{"access_token": "<signed JWT>", "token_type": "Bearer", "expires_in": 900}
-```
-
-Incorrect credentials return 401 with a generic failure. Missing or malformed
-credentials return 400. JWTs contain the database user ID in `sub`, roles, issuer,
-audience, issue time, and expiry. They contain no password or password hash.
-
-Supply `Authorization: Bearer <access_token>` on protected requests. User creation
-and login are public; `POST /shows` requires ADMIN; other routes require a valid
-token. HTTP Basic and form login are disabled. Public registration cannot assign
-ADMIN; administrator provisioning is a separate operation.
-
-The API uses stateless Spring Security authentication: no login sessions, no
-sticky routing, and no per-request user database lookup for token validation.
-CSRF protection is disabled because authentication uses explicitly supplied
-Authorization headers instead of browser-managed session cookies. If cookie
-authentication is added, revisit CSRF protection. Controllers can obtain the
-authenticated user ID from `@AuthenticationPrincipal Jwt jwt` using
-`jwt.getSubject()`; never accept the acting user ID from a request body.
-
-Tokens expire after 15 minutes by default. The JWT timestamp validator allows
-Spring Security's default 60-second clock skew. Logout is client-side token
-discard; immediate revocation, refresh tokens, login rate limiting, and immediate
-role-change propagation are not implemented. Existing tokens retain their roles
-until expiration. These controls must be addressed before public production use.
-
-Run the focused HTTP tests (including the security filter and service, with a
-mocked repository) using:
+Start the service:
 
 ```powershell
-./mvnw.cmd '-Dtest=UserControllerTests,JwtAuthenticationTests' test
+./mvnw.cmd spring-boot:run
 ```
 
-The JWT tests generate temporary test-only keys and cover login, identity and
-role spoofing, token tampering, expiry, issuer/audience validation, access rules,
-statelessness, and verification by an independently configured second instance.
+Flyway creates the schema on the first startup. Hibernate validates the migrated
+schema and never creates or updates it.
 
-## Local PostgreSQL connection
+### Provision the first administrator
 
-Prerequisites: JDK 25 and a running PostgreSQL installation.
+The application intentionally does not store default administrator credentials in
+Git or Flyway. For local development, register a user through the public endpoint,
+then promote that account using a trusted database session:
 
-1. In pgAdmin, connect to your local PostgreSQL server using the password chosen
-   during installation.
-2. Under Databases, create a database named `seat_reservation`. Alternatively,
-   run this SQL from the Query Tool while connected to the `postgres` database:
+```sql
+UPDATE users SET role = 'ADMIN' WHERE username = 'admin';
+```
 
-   ```sql
-   CREATE DATABASE seat_reservation;
-   ```
+Log in again so the newly issued JWT contains the `ADMIN` role. That administrator
+can create further administrators through the protected API. In production, this
+promotion must be an audited deployment operation using secret-managed credentials.
 
-3. In IntelliJ, open Run > Edit Configurations, select the application run
-   configuration, and add an environment variable named `DB_PASSWORD` with your
-   PostgreSQL password. If the environment variable field is hidden, enable it
-   under Modify options. Keep credentials in a local, unshared run configuration.
-4. Run `SeatReservationApplication`.
+## API
 
-The connection uses these settings:
+The local base URL is `http://localhost:8080`.
 
-| Environment variable | Default |
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/web/v1/user/create` | Public | Register a normal user |
+| `POST` | `/web/v1/auth/login` | Public | Obtain a bearer token |
+| `POST` | `/web/v1/user/create-admin` | ADMIN | Create another administrator |
+| `POST` | `/web/v1/show/create` | ADMIN | Create a show and its seats |
+| `GET` | `/web/v1/show/{id}` | Authenticated | Read seats and reconciliation counts |
+| `POST` | `/web/v1/shows/{id}/reserve` | Authenticated | Reserve one or more seats |
+| `POST` | `/web/v1/reservations/{id}/cancel` | Owner | Cancel a reservation |
+
+Protected requests require:
+
+```text
+Authorization: Bearer <access_token>
+```
+
+### Register and log in
+
+Register:
+
+```json
+{
+  "username": "mitesh",
+  "password": "example-password-123"
+}
+```
+
+Send the body to `POST /web/v1/user/create`, then send the same body to
+`POST /web/v1/auth/login`. A successful login returns:
+
+```json
+{
+  "access_token": "<signed JWT>",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+Passwords must contain at least 8 characters and at most 72 UTF-8 bytes. Only a
+salted BCrypt hash is stored.
+
+### Create a show
+
+Send to `POST /web/v1/show/create` with an administrator token:
+
+```json
+{
+  "name": "friday-night",
+  "seats": ["A1", "A2", "A3"],
+  "price_paise": 25000,
+  "per_user_limit": 4
+}
+```
+
+### Reserve seats
+
+Send to `POST /web/v1/shows/{show_id}/reserve`:
+
+```json
+{
+  "seats": ["A1", "A2"],
+  "idempotency_key": "checkout-8bb671ad"
+}
+```
+
+Success returns `201`. A taken seat, exceeded user limit, or conflicting reuse of
+an idempotency key returns `409`. Invalid input returns `400`.
+
+### Cancel a reservation
+
+The reservation owner sends:
+
+```text
+POST /web/v1/reservations/{reservation_id}/cancel
+```
+
+Cancellation is idempotent: cancelling an already-cancelled reservation returns its
+current cancelled state. A user cannot cancel another user's reservation.
+
+API errors contain only the HTTP status and message:
+
+```json
+{
+  "status": 409,
+  "message": "Seats are not available"
+}
+```
+
+## Health and metrics
+
+| Endpoint | Purpose |
 | --- | --- |
-| `DB_URL` | `jdbc:postgresql://localhost:5432/seat_reservation` |
-| `DB_USERNAME` | `postgres` |
-| `DB_PASSWORD` | Required; no password stored in the project |
+| `/actuator/health/liveness` | Internal application liveness |
+| `/actuator/health/readiness` | Readiness including PostgreSQL connectivity |
+| `/actuator/prometheus` | Prometheus exposition |
 
-If you installed PostgreSQL on a different port or use another database user,
-set `DB_URL` or `DB_USERNAME` in the same run configuration.
+Application metrics include:
 
-For a terminal run, set the same environment variables in your shell, then run:
+```text
+seat_reservation_reservations_confirmed_total
+seat_reservation_reservations_declined_total{reason="seat_taken"}
+seat_reservation_reservations_declined_total{reason="per_user_limit"}
+seat_reservation_idempotent_replays_total
+seat_reservation_seats_available
+```
+
+Console logs are JSON. Each response contains an `X-Request-ID`; callers may supply
+a safe request ID or allow the service to generate one. Completion logs contain the
+request ID, method, path, response status, and duration.
+
+## Database migrations
+
+Migrations live under `src/main/resources/db/migration`. Every migration must be
+safe to execute repeatedly. Flyway validates migration names and its destructive
+clean operation is disabled.
+
+If an older local database was created by Hibernate before Flyway was introduced,
+it has no Flyway history. Reset that disposable local database once, or use a
+deliberate baseline procedure if its data must be retained.
+
+## Container image
+
+Build the image:
 
 ```powershell
-.\mvnw.cmd spring-boot:run
+docker build -t seat-reservation .
 ```
 
-Spring Boot does not automatically load a `.env` file. Supply the variables
-through IntelliJ, the shell, or the deployment platform.
+The Dockerfile builds the executable jar in a Java 25 build stage, copies it into a
+Java 25 runtime image, and runs with a non-root numeric user. Tests and local secret
+files are excluded from the container build context.
 
-A successful startup should include Hikari connection-pool startup and
-`Started SeatReservationApplication`. A password authentication failure means
-the supplied username/password needs correcting; a missing database error means
-the database creation step has not been completed.
+At runtime, provide the database variables and mount the RSA key files as read-only
+container secrets. Set `JWT_PRIVATE_KEY` and `JWT_PUBLIC_KEY` to their mounted
+`file:` locations. The container listens on port `8080`.
 
-The current local setting is `spring.jpa.hibernate.ddl-auto=create`: restarting
-the application drops and recreates the entity tables, including the new password
-column. Use migrations and `validate` when moving to production.
+## Build verification
+
+Package the main application without compiling or running test sources:
+
+```powershell
+./mvnw.cmd -Dmaven.test.skip=true package
+```
+
+The current source packages successfully. The Docker image has not been built on
+this workstation because Docker is not installed here.
